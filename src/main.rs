@@ -63,28 +63,32 @@ struct Cli {
 }
 
 fn die(msg: impl std::fmt::Display) -> ! {
-    eprintln!("error: {}", msg);
+    eprintln!("error: {msg}");
     std::process::exit(1);
 }
 
 fn parse_version(s: &str) -> Result<(u16, u16, u16, u16), String> {
     let parts: Vec<&str> = s.split('.').collect();
-    let parse_part = |idx: usize| -> Result<u16, String> {
-        match parts.get(idx) {
-            None => Ok(0),
-            Some(p) => p
-                .parse::<u16>()
-                .map_err(|_| format!("invalid version component '{}' in '{}'", p, s)),
-        }
+    let p = |i: usize| {
+        parts
+            .get(i)
+            .map_or(Ok(0), |p| p.parse::<u16>().map_err(|_| format!("invalid version component '{p}' in '{s}'")))
     };
-    Ok((parse_part(0)?, parse_part(1)?, parse_part(2)?, parse_part(3)?))
+    Ok((p(0)?, p(1)?, p(2)?, p(3)?))
+}
+
+fn make_version(major: u16, minor: u16, patch: u16, build: u16) -> VersionU32 {
+    VersionU32 {
+        major: ((major as u32) << 16) | minor as u32,
+        minor: ((patch as u32) << 16) | build as u32,
+    }
 }
 
 fn load_version_info(resources: &ResourceDirectory) -> VersionInfo {
     match resources.get_version_info() {
         Ok(Some(vi)) => vi,
         Ok(None) => VersionInfo::default(),
-        Err(e) => die(format!("failed to read version info: {}", e)),
+        Err(e) => die(format!("failed to read version info: {e}")),
     }
 }
 
@@ -267,12 +271,11 @@ fn set_requested_execution_level(manifest: &str, level: &str) -> String {
            <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    \
              <security>\n      \
                <requestedPrivileges>\n        \
-                 <requestedExecutionLevel level=\"{}\" uiAccess=\"false\"/>\n      \
+                 <requestedExecutionLevel level=\"{level}\" uiAccess=\"false\"/>\n      \
                </requestedPrivileges>\n    \
              </security>\n  \
            </trustInfo>\n\
-         </assembly>",
-        level
+         </assembly>"
     )
 }
 
@@ -280,135 +283,133 @@ fn main() {
     let cli = Cli::parse();
     let filename = &cli.filename;
 
-    let has_ops = !cli.set_version_string.is_empty()
-        || !cli.set_file_version.is_empty()
-        || !cli.set_product_version.is_empty()
-        || !cli.set_icon.is_empty()
-        || !cli.set_resource_string.is_empty()
-        || !cli.set_requested_execution_level.is_empty()
-        || !cli.application_manifest.is_empty()
-        || !cli.get_version_string.is_empty()
-        || !cli.get_resource_string.is_empty();
-    if !has_ops {
+    if [
+        cli.get_version_string.as_slice(),
+        cli.get_resource_string.as_slice(),
+        cli.set_version_string.as_slice(),
+        cli.set_file_version.as_slice(),
+        cli.set_product_version.as_slice(),
+        cli.set_icon.as_slice(),
+        cli.set_resource_string.as_slice(),
+        cli.set_requested_execution_level.as_slice(),
+        cli.application_manifest.as_slice(),
+    ]
+    .iter()
+    .all(|s| s.is_empty())
+    {
         die("no operations specified");
     }
 
     let image_data = std::fs::read(filename)
-        .unwrap_or_else(|e| die(format!("failed to read '{}': {}", filename, e)));
+        .unwrap_or_else(|e| die(format!("failed to read '{filename}': {e}")));
     let mut image = Image::parse(&image_data)
-        .unwrap_or_else(|e| die(format!("failed to parse '{}': {}", filename, e)));
+        .unwrap_or_else(|e| die(format!("failed to parse '{filename}': {e}")));
     let mut resources = image.resource_directory().cloned().unwrap_or_default();
     let mut modified = false;
 
+    for key in &cli.get_version_string {
+        let vi = resources
+            .get_version_info()
+            .unwrap_or_else(|e| die(format!("failed to read version info: {e}")))
+            .unwrap_or_else(|| die(format!("no version info present in '{filename}'")));
+        println!(
+            "{}",
+            vi.strings
+                .iter()
+                .find_map(|t| t.strings.get(key.as_str()))
+                .cloned()
+                .unwrap_or_else(|| die(format!("version string '{key}' not found")))
+        );
+    }
+
+    for raw_id in &cli.get_resource_string {
+        let id: u32 = raw_id
+            .parse()
+            .unwrap_or_else(|_| die(format!("invalid resource string id '{raw_id}'")));
+        println!(
+            "{}",
+            get_resource_string(&resources, id)
+                .unwrap_or_else(|| die(format!("resource string {id} not found")))
+        );
+    }
+
     for chunk in cli.set_version_string.chunks(2) {
-        let (key, value) = (&chunk[0], &chunk[1]);
         let mut vi = load_version_info(&resources);
         if vi.strings.is_empty() {
             vi.strings.push(VersionStringTable {
-                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
+                key: format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
                 strings: Default::default(),
             });
         }
-        vi.strings[0].strings.insert(key.clone(), value.clone());
+        vi.strings[0].strings.insert(chunk[0].clone(), chunk[1].clone());
         resources
             .set_version_info(&vi)
-            .unwrap_or_else(|e| die(format!("failed to set version string: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to set version string: {e}")));
         modified = true;
     }
 
-    for version_str in &cli.set_file_version {
-        let (major, minor, patch, build) = parse_version(version_str).unwrap_or_else(|e| die(e));
+    for v in &cli.set_file_version {
+        let (major, minor, patch, build) = parse_version(v).unwrap_or_else(|e| die(e));
         let mut vi = load_version_info(&resources);
-        vi.info.file_version = VersionU32 {
-            major: ((major as u32) << 16) | (minor as u32),
-            minor: ((patch as u32) << 16) | (build as u32),
-        };
+        vi.info.file_version = make_version(major, minor, patch, build);
         resources
             .set_version_info(&vi)
-            .unwrap_or_else(|e| die(format!("failed to set file version: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to set file version: {e}")));
         modified = true;
     }
 
-    for version_str in &cli.set_product_version {
-        let (major, minor, patch, build) = parse_version(version_str).unwrap_or_else(|e| die(e));
+    for v in &cli.set_product_version {
+        let (major, minor, patch, build) = parse_version(v).unwrap_or_else(|e| die(e));
         let mut vi = load_version_info(&resources);
-        vi.info.product_version = VersionU32 {
-            major: ((major as u32) << 16) | (minor as u32),
-            minor: ((patch as u32) << 16) | (build as u32),
-        };
+        vi.info.product_version = make_version(major, minor, patch, build);
         resources
             .set_version_info(&vi)
-            .unwrap_or_else(|e| die(format!("failed to set product version: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to set product version: {e}")));
         modified = true;
     }
 
     for path in &cli.set_icon {
         resources
             .set_main_icon_file(path)
-            .unwrap_or_else(|e| die(format!("failed to set icon from '{}': {}", path, e)));
+            .unwrap_or_else(|e| die(format!("failed to set icon from '{path}': {e}")));
         modified = true;
     }
 
     for chunk in cli.set_resource_string.chunks(2) {
-        let id: u32 = chunk[0]
+        let id_str = &chunk[0];
+        let id: u32 = id_str
             .parse()
-            .unwrap_or_else(|_| die(format!("invalid resource string id '{}'", chunk[0])));
+            .unwrap_or_else(|_| die(format!("invalid resource string id '{id_str}'")));
         set_resource_string(&mut resources, id, &chunk[1]);
         modified = true;
     }
 
     for level in &cli.set_requested_execution_level {
-        let existing = match resources.get_manifest() {
-            Ok(Some(m)) => m,
-            Ok(None) => String::new(),
-            Err(e) => die(format!("failed to read manifest: {}", e)),
-        };
+        let existing = resources
+            .get_manifest()
+            .unwrap_or_else(|e| die(format!("failed to read manifest: {e}")))
+            .unwrap_or_default();
         resources
             .set_manifest(&set_requested_execution_level(&existing, level))
-            .unwrap_or_else(|e| die(format!("failed to set manifest: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to set manifest: {e}")));
         modified = true;
     }
 
     for path in &cli.application_manifest {
         let manifest = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| die(format!("failed to read manifest file '{}': {}", path, e)));
+            .unwrap_or_else(|e| die(format!("failed to read manifest file '{path}': {e}")));
         resources
             .set_manifest(&manifest)
-            .unwrap_or_else(|e| die(format!("failed to set manifest: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to set manifest: {e}")));
         modified = true;
-    }
-
-    for key in &cli.get_version_string {
-        let vi = match resources.get_version_info() {
-            Ok(Some(vi)) => vi,
-            Ok(None) => die(format!("no version info present in '{}'", filename)),
-            Err(e) => die(format!("failed to read version info: {}", e)),
-        };
-        let value = vi
-            .strings
-            .iter()
-            .find_map(|t| t.strings.get(key.as_str()))
-            .cloned()
-            .unwrap_or_else(|| die(format!("version string '{}' not found", key)));
-        println!("{}", value);
-    }
-
-    for raw_id in &cli.get_resource_string {
-        let id: u32 = raw_id
-            .parse()
-            .unwrap_or_else(|_| die(format!("invalid resource string id '{}'", raw_id)));
-        match get_resource_string(&resources, id) {
-            Some(s) => println!("{}", s),
-            None => die(format!("resource string {} not found", id)),
-        }
     }
 
     if modified {
         image
             .set_resource_directory(resources)
-            .unwrap_or_else(|e| die(format!("failed to update resource directory: {}", e)));
+            .unwrap_or_else(|e| die(format!("failed to update resource directory: {e}")));
         image
             .write_file(filename)
-            .unwrap_or_else(|e| die(format!("failed to write '{}': {}", filename, e)));
+            .unwrap_or_else(|e| die(format!("failed to write '{filename}': {e}")));
     }
 }
