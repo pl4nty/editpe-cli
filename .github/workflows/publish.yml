@@ -116,4 +116,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: editpe-${{ matrix.target }}${{ matrix.ext }}
-          archive: true
+          archive: false
