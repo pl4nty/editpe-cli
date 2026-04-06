@@ -29,7 +29,7 @@ doctest = false
 
 [[bin]]
 
-name = "editpe-cli"
+name = "editpe"
 path = "src/main.rs"
 required-features = ["cli"]
 
@@ -41,7 +41,7 @@ default = ["std", "images", "cli"]
 std = ["dep:thiserror"]
 # Enables processing images with the `image` crate. Also enables `std`.
 images = ["std", "dep:image"]
-# Enables the editpe-cli binary.
+# Enables the editpe binary.
 cli = ["std", "images", "dep:clap"]
 
 [dependencies]

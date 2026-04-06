@@ -109,8 +109,8 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --release --target ${{ matrix.target }} --bin editpe-cli
-          cp "target/${{ matrix.target }}/release/editpe-cli${{ matrix.ext }}" "editpe-${{ matrix.target }}${{ matrix.ext }}"
+          cargo build --release --target ${{ matrix.target }} --bin editpe
+          cp "target/${{ matrix.target }}/release/editpe${{ matrix.ext }}" "editpe-${{ matrix.target }}${{ matrix.ext }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

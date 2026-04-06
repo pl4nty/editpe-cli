@@ -9,7 +9,7 @@ use editpe::{
 /// API-compatible with https://github.com/electron/rcedit.
 #[derive(Debug, Parser)]
 #[command(
-    name = "editpe-cli",
+    name = "editpe",
     about = "Command line tool to edit resources of exe file",
     arg_required_else_help = true,
     disable_help_flag = true
