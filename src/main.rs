@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, value_name = "PATH", action = ArgAction::Append)]
     application_manifest: Vec<String>,
 
+    /// Set an RCDATA resource by id (numeric or named) from a file
+    #[arg(long, num_args = 2, value_names = ["ID", "PATH"], action = ArgAction::Append)]
+    set_rcdata: Vec<String>,
+
     /// Get a version string and print it to stdout
     #[arg(long, value_name = "KEY", action = ArgAction::Append)]
     get_version_string: Vec<String>,
@@ -290,6 +294,7 @@ fn main() {
         cli.set_resource_string.as_slice(),
         cli.set_requested_execution_level.as_slice(),
         cli.application_manifest.as_slice(),
+        cli.set_rcdata.as_slice(),
     ]
     .iter()
     .all(|s| s.is_empty())
@@ -398,6 +403,37 @@ fn main() {
         resources
             .set_manifest(&manifest)
             .unwrap_or_else(|e| die(format!("failed to set manifest: {e}")));
+        modified = true;
+    }
+
+    for chunk in cli.set_rcdata.chunks(2) {
+        let id_str = &chunk[0];
+        let path = &chunk[1];
+        let id_name = match id_str.parse::<u32>() {
+            Ok(n) => ResourceEntryName::ID(n),
+            Err(_) => ResourceEntryName::from_string(id_str),
+        };
+        let data = std::fs::read(path)
+            .unwrap_or_else(|e| die(format!("failed to read rcdata file '{path}': {e}")));
+        let type_name = ResourceEntryName::ID(RT_RCDATA as u32);
+
+        if resources.root().get(&type_name).is_none() {
+            resources
+                .root_mut()
+                .insert(type_name.clone(), ResourceEntry::Table(ResourceTable::default()));
+        }
+        let type_table = match resources.root_mut().get_mut(&type_name) {
+            Some(ResourceEntry::Table(t)) => t,
+            _ => die("rcdata type entry is not a table"),
+        };
+        let mut inner = match type_table.get(&id_name) {
+            Some(ResourceEntry::Table(t)) => t.clone(),
+            _ => ResourceTable::default(),
+        };
+        let mut entry = ResourceData::default();
+        entry.set_data(data);
+        inner.insert(ResourceEntryName::default(), ResourceEntry::Data(entry));
+        type_table.insert(id_name, ResourceEntry::Table(inner));
         modified = true;
     }
 
