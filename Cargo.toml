@@ -27,6 +27,12 @@ name = "editpe"
 path = "src/lib.rs"
 doctest = false
 
+[[bin]]
+
+name = "editpe-cli"
+path = "src/main.rs"
+required-features = ["std", "images"]
+
 [features]
 
 default = ["std", "images"]
