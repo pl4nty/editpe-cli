@@ -31,16 +31,18 @@ doctest = false
 
 name = "editpe-cli"
 path = "src/main.rs"
-required-features = ["std", "images"]
+required-features = ["cli"]
 
 [features]
 
-default = ["std", "images"]
+default = ["std", "images", "cli"]
 
 # Enables standard library features, including reading and writing files.
 std = ["dep:thiserror"]
 # Enables processing images with the `image` crate. Also enables `std`.
 images = ["std", "dep:image"]
+# Enables the editpe-cli binary.
+cli = ["std", "images", "dep:clap"]
 
 [dependencies]
 
@@ -52,6 +54,7 @@ foldhash = { version = "0.2.0", default-features = false }
 
 image = { version = "0.25.2", default-features = false, optional = true, features = ["ico"] }
 thiserror = { version = "2.0", optional = true }
+clap = { version = "4.6", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 
