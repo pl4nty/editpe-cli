@@ -1,9 +1,7 @@
 use clap::{ArgAction, Parser};
 use editpe::{
     Image, ResourceData, ResourceDirectory, ResourceEntry, ResourceEntryName, ResourceTable,
-    VersionInfo, VersionStringTable,
-    constants::*,
-    types::VersionU32,
+    VersionInfo, VersionStringTable, constants::*, types::VersionU32,
 };
 
 /// Command line tool to edit resources of exe files.
@@ -70,9 +68,10 @@ fn die(msg: impl std::fmt::Display) -> ! {
 fn parse_version(s: &str) -> Result<(u16, u16, u16, u16), String> {
     let parts: Vec<&str> = s.split('.').collect();
     let p = |i: usize| {
-        parts
-            .get(i)
-            .map_or(Ok(0), |p| p.parse::<u16>().map_err(|_| format!("invalid version component '{p}' in '{s}'")))
+        parts.get(i).map_or(Ok(0), |p| {
+            p.parse::<u16>()
+                .map_err(|_| format!("invalid version component '{p}' in '{s}'"))
+        })
     };
     Ok((p(0)?, p(1)?, p(2)?, p(3)?))
 }
@@ -169,10 +168,8 @@ fn set_resource_string(resources: &mut ResourceDirectory, id: u32, value: &str) 
         };
 
         if block_table.entries().is_empty() {
-            block_table.insert(
-                ResourceEntryName::default(),
-                ResourceEntry::Data(ResourceData::default()),
-            );
+            block_table
+                .insert(ResourceEntryName::default(), ResourceEntry::Data(ResourceData::default()));
             Vec::new()
         } else {
             let key = block_table.entries().first().copied().unwrap().clone();
@@ -337,7 +334,7 @@ fn main() {
         let mut vi = load_version_info(&resources);
         if vi.strings.is_empty() {
             vi.strings.push(VersionStringTable {
-                key: format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
+                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
                 strings: Default::default(),
             });
         }
