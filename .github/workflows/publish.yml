@@ -20,8 +20,15 @@ jobs:
   publish:
 
     name: Publish
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+        toolchain:
+          - stable
 
     steps:
       - name: Checkout source
@@ -29,11 +36,10 @@ jobs:
         with:
           submodules: recursive
           show-progress: false
-
       - name: Set up Rust toolchain
         uses: Systemcluster/actions@setup-rust-v0
         with:
-          channel: stable
+          channel: ${{ matrix.toolchain }}
           cache-key-job: true
 
       - name: Run tests
@@ -49,7 +55,7 @@ jobs:
 
   build:
 
-    name: Build ${{ matrix.artifact }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
@@ -58,25 +64,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: editpe-cli-linux-x64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact: editpe-cli-linux-arm64
             linker: gcc-aarch64-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: editpe-cli-windows-x64
             ext: .exe
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            artifact: editpe-cli-windows-arm64
             ext: .exe
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: editpe-cli-macos-x64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: editpe-cli-macos-arm64
 
     steps:
       - name: Checkout source
@@ -108,10 +108,12 @@ jobs:
           echo "CARGO_TARGET_${TARGET}_LINKER=${LINKER_BIN}-gcc" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --bin editpe-cli
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin editpe-cli
+          cp "target/${{ matrix.target }}/release/editpe-cli${{ matrix.ext }}" "editpe-${{ matrix.target }}${{ matrix.ext }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/editpe-cli${{ matrix.ext }}
+          path: editpe-${{ matrix.target }}${{ matrix.ext }}
+          archive: true
