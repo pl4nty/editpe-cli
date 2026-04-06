@@ -293,7 +293,9 @@ fn ordered_operations(cli: &Cli) -> Result<Vec<Operation>, String> {
     let mut grs = cli.get_resource_string.iter();
 
     let mut ops = Vec::new();
-    let mut raw = std::env::args().skip(2); // skip binary name + filename
+    // Skip the binary name and the positional filename argument
+    const ARGS_TO_SKIP: usize = 2;
+    let mut raw = std::env::args().skip(ARGS_TO_SKIP);
 
     while let Some(flag) = raw.next() {
         match flag.as_str() {
@@ -345,7 +347,8 @@ fn ordered_operations(cli: &Cli) -> Result<Vec<Operation>, String> {
                     .map_err(|_| format!("invalid resource string id '{}'", raw_id))?;
                 ops.push(Operation::GetResourceString(id));
             }
-            _ => {} // filename or unknown flags already rejected by clap
+            // Filename and any unrecognised tokens are already validated/rejected by clap
+            _ => {}
         }
     }
 
