@@ -69,22 +69,19 @@ fn die(msg: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
-fn parse_version(s: &str) -> Result<(u16, u16, u16, u16), String> {
+fn parse_version(s: &str) -> Result<VersionU32, String> {
     let parts: Vec<&str> = s.split('.').collect();
     let p = |i: usize| {
-        parts.get(i).map_or(Ok(0), |p| {
+        parts.get(i).map_or(Ok(0u16), |p| {
             p.parse::<u16>()
                 .map_err(|_| format!("invalid version component '{p}' in '{s}'"))
         })
     };
-    Ok((p(0)?, p(1)?, p(2)?, p(3)?))
-}
-
-fn make_version(major: u16, minor: u16, patch: u16, build: u16) -> VersionU32 {
-    VersionU32 {
+    let (major, minor, patch, build) = (p(0)?, p(1)?, p(2)?, p(3)?);
+    Ok(VersionU32 {
         major: ((major as u32) << 16) | minor as u32,
         minor: ((patch as u32) << 16) | build as u32,
-    }
+    })
 }
 
 fn load_version_info(resources: &ResourceDirectory) -> VersionInfo {
@@ -95,25 +92,23 @@ fn load_version_info(resources: &ResourceDirectory) -> VersionInfo {
     }
 }
 
+fn ensure_table<'a>(
+    table: &'a mut ResourceTable, name: &ResourceEntryName,
+) -> &'a mut ResourceTable {
+    if table.get(name).is_none() {
+        table.insert(name.clone(), ResourceEntry::Table(ResourceTable::default()));
+    }
+    table.get_mut(name).unwrap().as_table_mut().unwrap()
+}
+
 fn get_resource_string(resources: &ResourceDirectory, id: u32) -> Option<String> {
     let block_id = id / 16 + 1;
     let position = (id % 16) as usize;
 
-    let type_table = match resources.root().get(ResourceEntryName::ID(RT_STRING as u32)) {
-        Some(ResourceEntry::Table(t)) => t,
-        _ => return None,
-    };
-    let block_table = match type_table.get(ResourceEntryName::ID(block_id)) {
-        Some(ResourceEntry::Table(t)) => t,
-        _ => return None,
-    };
-
-    let keys = block_table.entries();
-    let lang_key = keys.first().copied()?.clone();
-    let data = match block_table.get(lang_key) {
-        Some(ResourceEntry::Data(d)) => d.data().to_vec(),
-        _ => return None,
-    };
+    let type_table = resources.root().get(ResourceEntryName::ID(RT_STRING as u32))?.as_table()?;
+    let block_table = type_table.get(ResourceEntryName::ID(block_id))?.as_table()?;
+    let lang_key = block_table.entries().first().copied()?.clone();
+    let data = block_table.get(lang_key)?.as_data()?.data();
 
     let mut offset = 0usize;
     for i in 0..16 {
@@ -142,49 +137,19 @@ fn set_resource_string(resources: &mut ResourceDirectory, id: u32, value: &str) 
     let type_name = ResourceEntryName::ID(RT_STRING as u32);
     let block_name = ResourceEntryName::ID(block_id);
 
-    // Ensure RT_STRING type table exists
-    if resources.root().get(&type_name).is_none() {
-        resources
-            .root_mut()
-            .insert(type_name.clone(), ResourceEntry::Table(ResourceTable::default()));
+    let block_table = ensure_table(ensure_table(resources.root_mut(), &type_name), &block_name);
+
+    if block_table.entries().is_empty() {
+        block_table
+            .insert(ResourceEntryName::default(), ResourceEntry::Data(ResourceData::default()));
     }
+    let key = block_table.entries().first().copied().unwrap().clone();
+    let existing_data = block_table
+        .get(&key)
+        .and_then(|e| e.as_data())
+        .map(|d| d.data().to_vec())
+        .unwrap_or_default();
 
-    // Ensure block table exists inside type table
-    {
-        let type_table = match resources.root_mut().get_mut(&type_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => return,
-        };
-        if type_table.get(&block_name).is_none() {
-            type_table.insert(block_name.clone(), ResourceEntry::Table(ResourceTable::default()));
-        }
-    }
-
-    // Read current data for the block (or empty if no language entry exists yet)
-    let existing_data: Vec<u8> = {
-        let type_table = match resources.root_mut().get_mut(&type_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => return,
-        };
-        let block_table = match type_table.get_mut(&block_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => return,
-        };
-
-        if block_table.entries().is_empty() {
-            block_table
-                .insert(ResourceEntryName::default(), ResourceEntry::Data(ResourceData::default()));
-            Vec::new()
-        } else {
-            let key = block_table.entries().first().copied().unwrap().clone();
-            match block_table.get(&key) {
-                Some(ResourceEntry::Data(d)) => d.data().to_vec(),
-                _ => return,
-            }
-        }
-    };
-
-    // Parse the 16-string block, padding with empty strings as needed
     let mut strings: Vec<Vec<u16>> = Vec::with_capacity(16);
     let mut offset = 0usize;
     for _ in 0..16 {
@@ -202,20 +167,16 @@ fn set_resource_string(resources: &mut ResourceDirectory, id: u32, value: &str) 
                         existing_data[offset + j * 2 + 1],
                     ])
                 })
-                .collect::<Vec<u16>>()
+                .collect()
         } else {
             Vec::new()
         };
         offset += len * 2;
         strings.push(chars);
     }
-    while strings.len() < 16 {
-        strings.push(Vec::new());
-    }
 
     strings[position] = value.encode_utf16().collect();
 
-    // Rebuild binary data for the block
     let mut new_data: Vec<u8> = Vec::new();
     for chars in &strings {
         new_data.extend_from_slice(&(chars.len() as u16).to_le_bytes());
@@ -224,60 +185,43 @@ fn set_resource_string(resources: &mut ResourceDirectory, id: u32, value: &str) 
         }
     }
 
-    // Write back
-    {
-        let type_table = match resources.root_mut().get_mut(&type_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => return,
-        };
-        let block_table = match type_table.get_mut(&block_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => return,
-        };
-        let key = block_table.entries().first().copied().unwrap().clone();
-        if let Some(ResourceEntry::Data(d)) = block_table.get_mut(&key) {
-            d.set_data(new_data);
-        }
+    if let Some(d) = block_table.get_mut(&key).and_then(|e| e.as_data_mut()) {
+        d.set_data(new_data);
     }
 }
 
 /// Modify the `level` attribute of `<requestedExecutionLevel>` in an XML manifest string.
 /// If the element or attribute is not found, a minimal manifest containing it is returned.
 fn set_requested_execution_level(manifest: &str, level: &str) -> String {
-    if let Some(elem_pos) = manifest.find("requestedExecutionLevel") {
-        let after_elem = &manifest[elem_pos..];
-        if let Some(attr_rel) = after_elem.find("level=") {
-            let attr_start = elem_pos + attr_rel + 6; // skip past `level=`
-            if let Some(quote) = manifest[attr_start..].chars().next() {
-                if quote == '"' || quote == '\'' {
-                    if let Some(end_rel) = manifest[attr_start + 1..].find(quote) {
-                        let end_pos = attr_start + 1 + end_rel;
-                        return format!(
-                            "{}{}{}{}",
-                            &manifest[..attr_start + 1],
-                            level,
-                            quote,
-                            &manifest[end_pos + 1..]
-                        );
-                    }
-                }
-            }
-        }
-    }
+    let try_replace = || -> Option<String> {
+        let elem_pos = manifest.find("requestedExecutionLevel")?;
+        let attr_rel = manifest[elem_pos..].find("level=")?;
+        let attr_start = elem_pos + attr_rel + 6;
+        let quote = manifest[attr_start..].chars().next().filter(|&c| c == '"' || c == '\'')?;
+        let end_pos = attr_start + 1 + manifest[attr_start + 1..].find(quote)?;
+        Some(format!(
+            "{}{}{}{}",
+            &manifest[..attr_start + 1],
+            level,
+            quote,
+            &manifest[end_pos + 1..]
+        ))
+    };
 
-    // No existing manifest or element: create a minimal manifest with the requested level
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
-         <assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n  \
-           <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    \
-             <security>\n      \
-               <requestedPrivileges>\n        \
-                 <requestedExecutionLevel level=\"{level}\" uiAccess=\"false\"/>\n      \
-               </requestedPrivileges>\n    \
-             </security>\n  \
-           </trustInfo>\n\
-         </assembly>"
-    )
+    try_replace().unwrap_or_else(|| {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+             <assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n  \
+               <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    \
+                 <security>\n      \
+                   <requestedPrivileges>\n        \
+                     <requestedExecutionLevel level=\"{level}\" uiAccess=\"false\"/>\n      \
+                   </requestedPrivileges>\n    \
+                 </security>\n  \
+               </trustInfo>\n\
+             </assembly>"
+        )
+    })
 }
 
 fn main() {
@@ -351,9 +295,8 @@ fn main() {
     }
 
     for v in &cli.set_file_version {
-        let (major, minor, patch, build) = parse_version(v).unwrap_or_else(|e| die(e));
         let mut vi = load_version_info(&resources);
-        vi.info.file_version = make_version(major, minor, patch, build);
+        vi.info.file_version = parse_version(v).unwrap_or_else(|e| die(e));
         resources
             .set_version_info(&vi)
             .unwrap_or_else(|e| die(format!("failed to set file version: {e}")));
@@ -361,9 +304,8 @@ fn main() {
     }
 
     for v in &cli.set_product_version {
-        let (major, minor, patch, build) = parse_version(v).unwrap_or_else(|e| die(e));
         let mut vi = load_version_info(&resources);
-        vi.info.product_version = make_version(major, minor, patch, build);
+        vi.info.product_version = parse_version(v).unwrap_or_else(|e| die(e));
         resources
             .set_version_info(&vi)
             .unwrap_or_else(|e| die(format!("failed to set product version: {e}")));
@@ -378,10 +320,9 @@ fn main() {
     }
 
     for chunk in cli.set_resource_string.chunks(2) {
-        let id_str = &chunk[0];
-        let id: u32 = id_str
+        let id: u32 = chunk[0]
             .parse()
-            .unwrap_or_else(|_| die(format!("invalid resource string id '{id_str}'")));
+            .unwrap_or_else(|_| die(format!("invalid resource string id '{}'", chunk[0])));
         set_resource_string(&mut resources, id, &chunk[1]);
         modified = true;
     }
@@ -407,33 +348,19 @@ fn main() {
     }
 
     for chunk in cli.set_rcdata.chunks(2) {
-        let id_str = &chunk[0];
-        let path = &chunk[1];
-        let id_name = match id_str.parse::<u32>() {
+        let id_name = match chunk[0].parse::<u32>() {
             Ok(n) => ResourceEntryName::ID(n),
-            Err(_) => ResourceEntryName::from_string(id_str),
+            Err(_) => ResourceEntryName::from_string(&chunk[0]),
         };
-        let data = std::fs::read(path)
-            .unwrap_or_else(|e| die(format!("failed to read rcdata file '{path}': {e}")));
-        let type_name = ResourceEntryName::ID(RT_RCDATA as u32);
-
-        if resources.root().get(&type_name).is_none() {
-            resources
-                .root_mut()
-                .insert(type_name.clone(), ResourceEntry::Table(ResourceTable::default()));
-        }
-        let type_table = match resources.root_mut().get_mut(&type_name) {
-            Some(ResourceEntry::Table(t)) => t,
-            _ => die("rcdata type entry is not a table"),
-        };
-        let mut inner = match type_table.get(&id_name) {
-            Some(ResourceEntry::Table(t)) => t.clone(),
-            _ => ResourceTable::default(),
-        };
+        let data = std::fs::read(&chunk[1])
+            .unwrap_or_else(|e| die(format!("failed to read rcdata file '{}': {e}", chunk[1])));
+        let inner = ensure_table(
+            ensure_table(resources.root_mut(), &ResourceEntryName::ID(RT_RCDATA as u32)),
+            &id_name,
+        );
         let mut entry = ResourceData::default();
         entry.set_data(data);
         inner.insert(ResourceEntryName::default(), ResourceEntry::Data(entry));
-        type_table.insert(id_name, ResourceEntry::Table(inner));
         modified = true;
     }
 
