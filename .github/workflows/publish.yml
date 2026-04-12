@@ -36,6 +36,7 @@ jobs:
         with:
           submodules: recursive
           show-progress: false
+
       - name: Set up Rust toolchain
         uses: Systemcluster/actions@setup-rust-v0
         with:
