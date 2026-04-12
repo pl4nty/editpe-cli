@@ -87,6 +87,11 @@ fn parse_version(s: &str) -> Result<VersionU32, String> {
     })
 }
 
+/// Convert packed PE version fields to dotted `major.minor.patch.build`.
+///
+/// In `VersionU32`, each `u32` stores two `u16` components:
+/// - `major`: high 16 bits = major, low 16 bits = minor
+/// - `minor`: high 16 bits = patch, low 16 bits = build
 fn version_to_string(version: VersionU32) -> String {
     let major = (version.major >> 16) as u16;
     let minor = version.major as u16;
@@ -100,6 +105,15 @@ fn load_version_info(resources: &ResourceDirectory) -> VersionInfo {
         Ok(Some(vi)) => vi,
         Ok(None) => VersionInfo::default(),
         Err(e) => die(format!("failed to read version info: {e}")),
+    }
+}
+
+fn ensure_default_version_string_table(vi: &mut VersionInfo) {
+    if vi.strings.is_empty() {
+        vi.strings.push(VersionStringTable {
+            key: format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
+            strings: Default::default(),
+        });
     }
 }
 
@@ -278,10 +292,7 @@ fn main() {
             "{}",
             fallback
                 .or_else(|| {
-                    vi.strings
-                .iter()
-                .find_map(|t| t.strings.get(key.as_str()))
-                .cloned()
+                    vi.strings.iter().find_map(|t| t.strings.get(key.as_str())).cloned()
                 })
                 .unwrap_or_else(|| die(format!("version string '{key}' not found")))
         );
@@ -300,12 +311,7 @@ fn main() {
 
     for chunk in cli.set_version_string.chunks(2) {
         let mut vi = load_version_info(&resources);
-        if vi.strings.is_empty() {
-            vi.strings.push(VersionStringTable {
-                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
-                strings: Default::default(),
-            });
-        }
+        ensure_default_version_string_table(&mut vi);
         vi.strings[0].strings.insert(chunk[0].clone(), chunk[1].clone());
         resources
             .set_version_info(&vi)
@@ -316,12 +322,7 @@ fn main() {
     for v in &cli.set_file_version {
         let mut vi = load_version_info(&resources);
         vi.info.file_version = parse_version(v).unwrap_or_else(|e| die(e));
-        if vi.strings.is_empty() {
-            vi.strings.push(VersionStringTable {
-                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
-                strings: Default::default(),
-            });
-        }
+        ensure_default_version_string_table(&mut vi);
         vi.strings[0]
             .strings
             .insert("FileVersion".to_string(), version_to_string(vi.info.file_version));
@@ -334,12 +335,7 @@ fn main() {
     for v in &cli.set_product_version {
         let mut vi = load_version_info(&resources);
         vi.info.product_version = parse_version(v).unwrap_or_else(|e| die(e));
-        if vi.strings.is_empty() {
-            vi.strings.push(VersionStringTable {
-                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
-                strings: Default::default(),
-            });
-        }
+        ensure_default_version_string_table(&mut vi);
         vi.strings[0]
             .strings
             .insert("ProductVersion".to_string(), version_to_string(vi.info.product_version));
