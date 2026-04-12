@@ -71,13 +71,26 @@ fn die(msg: impl std::fmt::Display) -> ! {
 
 fn parse_version(s: &str) -> Result<VersionU32, String> {
     let parts: Vec<&str> = s.split('.').collect();
-    let p = |i: usize| {
-        parts.get(i).map_or(Ok(0u16), |p| {
-            p.parse::<u16>()
-                .map_err(|_| format!("invalid version component '{p}' in '{s}'"))
-        })
-    };
-    let (major, minor, patch, build) = (p(0)?, p(1)?, p(2)?, p(3)?);
+    if parts.len() > 4 {
+        return Err(format!(
+            "invalid version '{s}': expected at most 4 dot-separated components"
+        ));
+    }
+
+    let mut parsed = [0u16; 4];
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            return Err(format!(
+                "invalid version '{s}': empty version component at position {}",
+                i + 1
+            ));
+        }
+        parsed[i] = part
+            .parse::<u16>()
+            .map_err(|_| format!("invalid version component '{part}' in '{s}'"))?;
+    }
+
+    let [major, minor, patch, build] = parsed;
     Ok(VersionU32 {
         major: ((major as u32) << 16) | minor as u32,
         minor: ((patch as u32) << 16) | build as u32,
@@ -98,7 +111,17 @@ fn ensure_table<'a>(
     if table.get(name).is_none() {
         table.insert(name.clone(), ResourceEntry::Table(ResourceTable::default()));
     }
-    table.get_mut(name).unwrap().as_table_mut().unwrap()
+    match table.get_mut(name) {
+        Some(ResourceEntry::Table(inner)) => inner,
+        Some(ResourceEntry::Data(_)) => {
+            die(format!(
+                "invalid resource table: entry '{name:?}' is data, not a table"
+            ))
+        }
+        None => die(format!(
+            "failed to create or retrieve resource table entry '{name:?}'"
+        )),
+    }
 }
 
 fn get_resource_string(resources: &ResourceDirectory, id: u32) -> Option<String> {
@@ -107,8 +130,14 @@ fn get_resource_string(resources: &ResourceDirectory, id: u32) -> Option<String>
 
     let type_table = resources.root().get(ResourceEntryName::ID(RT_STRING as u32))?.as_table()?;
     let block_table = type_table.get(ResourceEntryName::ID(block_id))?.as_table()?;
-    let lang_key = block_table.entries().first().copied()?.clone();
-    let data = block_table.get(lang_key)?.as_data()?.data();
+    let data = block_table
+        .get(ResourceEntryName::ID(LANGUAGE_ID_EN_US as u32))
+        .or_else(|| {
+            let lang_key = block_table.entries().first()?.clone();
+            block_table.get(lang_key)
+        })?
+        .as_data()?
+        .data();
 
     let mut offset = 0usize;
     for i in 0..16 {
@@ -185,8 +214,15 @@ fn set_resource_string(resources: &mut ResourceDirectory, id: u32, value: &str) 
         }
     }
 
-    if let Some(d) = block_table.get_mut(&key).and_then(|e| e.as_data_mut()) {
-        d.set_data(new_data);
+    if let Some(entry) = block_table.get_mut(&key) {
+        match entry {
+            ResourceEntry::Data(d) => d.set_data(new_data),
+            _ => {
+                let mut data = ResourceData::default();
+                data.set_data(new_data);
+                *entry = ResourceEntry::Data(data);
+            }
+        }
     }
 }
 

@@ -35,7 +35,7 @@ required-features = ["cli"]
 
 [features]
 
-default = ["std", "images", "cli"]
+default = ["std", "images"]
 
 # Enables standard library features, including reading and writing files.
 std = ["dep:thiserror"]
