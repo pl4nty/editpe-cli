@@ -71,6 +71,9 @@ fn die(msg: impl std::fmt::Display) -> ! {
 
 fn parse_version(s: &str) -> Result<VersionU32, String> {
     let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() > 4 {
+        return Err(format!("invalid version '{s}': too many components"));
+    }
     let p = |i: usize| {
         parts.get(i).map_or(Ok(0u16), |p| {
             p.parse::<u16>()
@@ -82,6 +85,14 @@ fn parse_version(s: &str) -> Result<VersionU32, String> {
         major: ((major as u32) << 16) | minor as u32,
         minor: ((patch as u32) << 16) | build as u32,
     })
+}
+
+fn version_to_string(version: VersionU32) -> String {
+    let major = (version.major >> 16) as u16;
+    let minor = version.major as u16;
+    let patch = (version.minor >> 16) as u16;
+    let build = version.minor as u16;
+    format!("{major}.{minor}.{patch}.{build}")
 }
 
 fn load_version_info(resources: &ResourceDirectory) -> VersionInfo {
@@ -258,12 +269,20 @@ fn main() {
             .get_version_info()
             .unwrap_or_else(|e| die(format!("failed to read version info: {e}")))
             .unwrap_or_else(|| die(format!("no version info present in '{filename}'")));
+        let fallback = match key.as_str() {
+            "FileVersion" => Some(version_to_string(vi.info.file_version)),
+            "ProductVersion" => Some(version_to_string(vi.info.product_version)),
+            _ => None,
+        };
         println!(
             "{}",
-            vi.strings
+            fallback
+                .or_else(|| {
+                    vi.strings
                 .iter()
                 .find_map(|t| t.strings.get(key.as_str()))
                 .cloned()
+                })
                 .unwrap_or_else(|| die(format!("version string '{key}' not found")))
         );
     }
@@ -297,6 +316,15 @@ fn main() {
     for v in &cli.set_file_version {
         let mut vi = load_version_info(&resources);
         vi.info.file_version = parse_version(v).unwrap_or_else(|e| die(e));
+        if vi.strings.is_empty() {
+            vi.strings.push(VersionStringTable {
+                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
+                strings: Default::default(),
+            });
+        }
+        vi.strings[0]
+            .strings
+            .insert("FileVersion".to_string(), version_to_string(vi.info.file_version));
         resources
             .set_version_info(&vi)
             .unwrap_or_else(|e| die(format!("failed to set file version: {e}")));
@@ -306,6 +334,15 @@ fn main() {
     for v in &cli.set_product_version {
         let mut vi = load_version_info(&resources);
         vi.info.product_version = parse_version(v).unwrap_or_else(|e| die(e));
+        if vi.strings.is_empty() {
+            vi.strings.push(VersionStringTable {
+                key:     format!("{:04X}{:04X}", LANGUAGE_ID_EN_US, CODE_PAGE_ID_EN_US),
+                strings: Default::default(),
+            });
+        }
+        vi.strings[0]
+            .strings
+            .insert("ProductVersion".to_string(), version_to_string(vi.info.product_version));
         resources
             .set_version_info(&vi)
             .unwrap_or_else(|e| die(format!("failed to set product version: {e}")));
